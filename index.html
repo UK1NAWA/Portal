@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Student Registration</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="form-container">
+    <h2>Student Registration</h2>
+    <p style="font-size:13px; color:#6b7280; margin-bottom:16px; margin-top:-6px;">
+        Your account will be reviewed by an admin before you can log in.
+    </p>
+
+    <div id="errorMsg"   style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3);
+        color:#f87171; border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:14px;"></div>
+    <div id="successMsg" style="display:none; background:rgba(62,207,142,0.12); border:1px solid rgba(62,207,142,0.3);
+        color:#3ecf8e; border-radius:8px; padding:10px 14px; font-size:13px; margin-bottom:14px;"></div>
+
+    <form action="register.php" method="POST">
+        <label for="fullname">Full Name</label>
+        <input type="text" name="fullname" id="fullname" required autocomplete="name">
+
+        <label for="email">Email</label>
+        <input type="email" name="email" id="email" required autocomplete="email">
+
+        <label for="username">Username</label>
+        <input type="text" name="username" id="username" required autocomplete="username"
+               minlength="3" placeholder="At least 3 characters">
+
+        <label for="password">Password</label>
+        <input type="password" name="password" id="password" required autocomplete="new-password"
+               minlength="8" placeholder="At least 8 characters">
+
+        <label for="confirm">Confirm Password</label>
+        <input type="password" name="confirm" id="confirm" required autocomplete="new-password">
+
+        <label for="student_id_no">Student ID Number</label>
+        <input type="text" name="student_id_no" id="student_id_no" required
+               placeholder="e.g. 1602763" maxlength="30"
+               title="Your school-assigned student ID number found on your school ID or enrollment form">
+
+        <div style="margin-bottom:14px; display:flex; align-items:flex-start; gap:8px;">
+            <input type="checkbox" id="agree_terms" required style="margin-top:3px; flex-shrink:0; width:15px; height:15px;">
+            <label for="agree_terms" style="font-size:13px; color:#6b7280; cursor:pointer;">
+                I have read and agree to the
+                <a href="terms.html" target="_blank" style="color:#dc2626;">Terms of Use</a>
+                and
+                <a href="privacy.html" target="_blank" style="color:#dc2626;">Privacy Policy</a>
+            </label>
+        </div>
+        <button type="submit">Submit Registration</button>
+    </form>
+
+    <p style="margin-top:14px;">
+        Already have an account?
+        <a href="login.html">Login</a>
+    </p>
+</div>
+
+<script>
+const regErr = sessionStorage.getItem('regError');
+const regOk  = sessionStorage.getItem('regSuccess');
+
+if (regErr) {
+    const el = document.getElementById('errorMsg');
+    el.textContent = regErr;
+    el.style.display = 'block';
+    sessionStorage.removeItem('regError');
+}
+if (regOk) {
+    const el = document.getElementById('successMsg');
+    el.textContent = regOk;
+    el.style.display = 'block';
+    sessionStorage.removeItem('regSuccess');
+}
+</script>
+
+</body>
+</html>

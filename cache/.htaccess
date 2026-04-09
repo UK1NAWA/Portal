@@ -1,0 +1,2 @@
+# Prevent direct browser access to cache files
+Deny from all

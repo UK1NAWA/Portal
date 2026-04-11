@@ -21,53 +21,18 @@ $_SESSION['section'] = $student_section;
 <!DOCTYPE html>
 <?php
 
-$today_schedules   = [];
-$all_schedules     = [];
-$schedule_is_draft = false;
-
+// Schedule image — cache per section, 5 min TTL
+$schedule_image = null;
 if($student_section){
-    $today = date('D');
-
-    // Cache today's schedule per section+day — 5 min TTL
-    $cache_key_today = 'sched_today_' . md5($student_section . $today);
-    $today_schedules = Cache::get($cache_key_today);
-    if($today_schedules === null){
-        $stmt = $conn->prepare("
-            SELECT ts.label AS time, ss.subject, ss.instructor, ss.room, ss.day
-            FROM section_schedules ss
-            JOIN time_slots ts ON ts.id = ss.time_slot_id
-            WHERE ss.section = ? AND ss.day = ? AND ss.status = 'published'
-            ORDER BY ts.id
-        ");
-        $stmt->bind_param("ss", $student_section, $today);
-        $stmt->execute();
-        $today_schedules = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        Cache::set($cache_key_today, $today_schedules, 300);
-    }
-
-    // Cache full week schedule per section — 5 min TTL
-    $cache_key_week = 'sched_week_' . md5($student_section);
-    $all_schedules  = Cache::get($cache_key_week);
-    if($all_schedules === null){
-        $stmt2 = $conn->prepare("
-            SELECT ts.label AS time, ss.subject, ss.instructor, ss.room, ss.day
-            FROM section_schedules ss
-            JOIN time_slots ts ON ts.id = ss.time_slot_id
-            WHERE ss.section = ? AND ss.status = 'published'
-            ORDER BY FIELD(ss.day,'Mon','Tue','Wed','Thu','Fri','Sat'), ts.id
-        ");
-        $stmt2->bind_param("s", $student_section);
-        $stmt2->execute();
-        $all_schedules = $stmt2->get_result()->fetch_all(MYSQLI_ASSOC);
-        Cache::set($cache_key_week, $all_schedules, 300);
-    }
-
-    if(empty($all_schedules)){
-        $chk_draft = $conn->prepare("SELECT id FROM section_schedules WHERE section=? LIMIT 1");
-        $chk_draft->bind_param("s", $student_section);
-        $chk_draft->execute();
-        $chk_draft->store_result();
-        if($chk_draft->num_rows > 0) $schedule_is_draft = true;
+    $cache_key_sched = 'sched_img_' . md5($student_section);
+    $schedule_image  = Cache::get($cache_key_sched);
+    if($schedule_image === null){
+        $si_q = $conn->prepare("SELECT image_path FROM schedule_images WHERE section=?");
+        $si_q->bind_param("s", $student_section);
+        $si_q->execute();
+        $si_row = $si_q->get_result()->fetch_assoc();
+        $schedule_image = $si_row['image_path'] ?? '';
+        Cache::set($cache_key_sched, $schedule_image, 300);
     }
 }
 
@@ -196,28 +161,16 @@ foreach($grade_rows as $gr){
 </div>
 <!----------------------TODAY'S SCHEDULE------------------>
 <div class="mini-schedule-box dark-card">
-    <h2>Today's Schedule</h2>
-
-    <?php if(empty($today_schedules)): ?>
-        <?php if(!$student_section): ?>
-            <div class="no-class-msg">You have not been assigned to a section yet.</div>
-        <?php elseif($schedule_is_draft): ?>
-            <div class="no-class-msg">Your schedule is being prepared. Check back soon.</div>
-        <?php else: ?>
-            <div class="no-class-msg">No classes today.</div>
-        <?php endif; ?>
+    <h2>Schedule</h2>
+    <?php if($schedule_image && file_exists($schedule_image)): ?>
+        <img src="<?php echo htmlspecialchars($schedule_image); ?>"
+             alt="Class Schedule"
+             style="width:100%; border-radius:8px; margin-bottom:10px; object-fit:cover;">
+    <?php elseif(!$student_section): ?>
+        <div class="no-class-msg">You have not been assigned to a section yet.</div>
     <?php else: ?>
-        <?php foreach($today_schedules as $row): ?>
-        <div class="today-item">
-            <div class="today-time"><?php echo htmlspecialchars($row['time']); ?></div>
-            <div class="today-details">
-                <span class="today-subject"><?php echo htmlspecialchars($row['subject']); ?></span>
-                <span class="today-meta"><?php echo htmlspecialchars($row['instructor']); ?> &mdash; Room <?php echo htmlspecialchars($row['room']); ?></span>
-            </div>
-        </div>
-        <?php endforeach; ?>
+        <div class="no-class-msg">No schedule uploaded yet.</div>
     <?php endif; ?>
-
     <button class="save" onclick="showSection('scheduleSection', this, event)">
         View Full Schedule
     </button>
@@ -381,7 +334,6 @@ foreach($grade_rows as $gr){
 
             <!-- SCHEDULE -->
             <div class="portal" id="scheduleSection" style="display:none;">
-
                 <div class="sched-header">
                     <h2>Weekly Schedule</h2>
                     <?php if($_SESSION['section']): ?>
@@ -389,106 +341,20 @@ foreach($grade_rows as $gr){
                     <?php endif; ?>
                 </div>
 
-                <?php if(empty($all_schedules)): ?>
                 <?php if(!$student_section): ?>
-                <div class="sched-empty">You have not been assigned to a section yet. Please contact your teacher or admin.</div>
-                <?php elseif($schedule_is_draft): ?>
-                <div class="sched-empty">Your schedule for <strong><?php echo htmlspecialchars($student_section); ?></strong> is still being prepared. It will appear here once published.</div>
-                <?php else: ?>
-                <div class="sched-empty">No published schedule for your section yet.</div>
-                <?php endif; ?>
-                <?php else:
-                    $day_order = ['Mon','Tue','Wed','Thu','Fri','Sat'];
+                <div class="sched-empty">You have not been assigned to a section yet. Please contact your admin.</div>
 
-                    // Build lookup: [time_label][day] = row
-                    // Also collect all unique time slots in order
-                    $slot_map  = [];
-                    $all_times = [];
-                    foreach($all_schedules as $row){
-                        $slot_map[$row['time']][$row['day']] = $row;
-                        if(!in_array($row['time'], $all_times)) $all_times[] = $row['time'];
-                    }
-
-                    // Detect which days actually have data
-                    $active_days = [];
-                    foreach($day_order as $d){
-                        foreach($all_schedules as $row){
-                            if($row['day'] === $d){ $active_days[] = $d; break; }
-                        }
-                    }
-
-                    // Separate morning (before 12:00) and afternoon (12:00+)
-                    // Based on the start hour of the time label e.g. "7:30 - 8:30"
-                    $morning_slots   = [];
-                    $afternoon_slots = [];
-                    foreach($all_times as $t){
-                        $start_hour = (int)explode(':', $t)[0];
-                        if($start_hour < 12) $morning_slots[] = $t;
-                        else                  $afternoon_slots[] = $t;
-                    }
-                ?>
-                <div style="overflow-x:auto;">
-                <table class="sched-grid-table">
-                    <thead>
-                        <tr>
-                            <th class="sched-time-col"></th>
-                            <?php foreach($active_days as $d): ?>
-                            <th class="sched-day-col"><?php echo $d; ?></th>
-                            <?php endforeach; ?>
-                        </tr>
-                    </thead>
-                    <tbody>
-
-                    <?php if(!empty($morning_slots)): ?>
-                    <!-- MORNING DIVIDER -->
-                    <tr>
-                        <td colspan="<?php echo count($active_days) + 1; ?>" class="sched-period-divider">
-                            ☀ Morning
-                        </td>
-                    </tr>
-                    <?php foreach($morning_slots as $time): ?>
-                    <tr>
-                        <td class="sched-time-cell"><?php echo htmlspecialchars($time); ?></td>
-                        <?php foreach($active_days as $d): ?>
-                        <td class="sched-cell">
-                            <?php if(isset($slot_map[$time][$d])): $r = $slot_map[$time][$d]; ?>
-                            <div class="sched-cell-subj"><?php echo htmlspecialchars($r['subject']); ?></div>
-                            <div class="sched-cell-room"><?php echo htmlspecialchars($r['room']); ?></div>
-                            <div class="sched-cell-meta"><?php echo htmlspecialchars($r['instructor']); ?></div>
-                            <?php endif; ?>
-                        </td>
-                        <?php endforeach; ?>
-                    </tr>
-                    <?php endforeach; endif; ?>
-
-                    <?php if(!empty($afternoon_slots)): ?>
-                    <!-- AFTERNOON DIVIDER -->
-                    <tr>
-                        <td colspan="<?php echo count($active_days) + 1; ?>" class="sched-period-divider afternoon">
-                            ◑ Afternoon
-                        </td>
-                    </tr>
-                    <?php foreach($afternoon_slots as $time): ?>
-                    <tr>
-                        <td class="sched-time-cell"><?php echo htmlspecialchars($time); ?></td>
-                        <?php foreach($active_days as $d): ?>
-                        <td class="sched-cell">
-                            <?php if(isset($slot_map[$time][$d])): $r = $slot_map[$time][$d]; ?>
-                            <div class="sched-cell-subj"><?php echo htmlspecialchars($r['subject']); ?></div>
-                            <div class="sched-cell-room"><?php echo htmlspecialchars($r['room']); ?></div>
-                            <div class="sched-cell-meta"><?php echo htmlspecialchars($r['instructor']); ?></div>
-                            <?php endif; ?>
-                        </td>
-                        <?php endforeach; ?>
-                    </tr>
-                    <?php endforeach; endif; ?>
-
-                    </tbody>
-                </table>
+                <?php elseif($schedule_image && file_exists($schedule_image)): ?>
+                <div style="text-align:center;">
+                    <img src="<?php echo htmlspecialchars($schedule_image); ?>"
+                         alt="Class Schedule for <?php echo htmlspecialchars($student_section); ?>"
+                         style="max-width:100%; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.4);">
                 </div>
-                <?php endif; ?>
 
-            </div><!-- end scheduleSection -->
+                <?php else: ?>
+                <div class="sched-empty">No schedule has been uploaded yet. Check back soon.</div>
+                <?php endif; ?>
+            </div>
 
         </main>
     </div>

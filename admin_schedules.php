@@ -5,164 +5,191 @@ include_once __DIR__ . '/cache.php';
 
 if(!isset($_SESSION['loggedIn']) || $_SESSION['role'] !== 'admin'){
     header("Location: login.html");
-   exit();
     exit();
 }
 
-$error = '';
+// Ensure upload folder exists
+$upload_dir = __DIR__ . '/schedule_images/';
+if(!is_dir($upload_dir)) mkdir($upload_dir, 0755, true);
 
-if(isset($_POST['create_schedule'])){
-    csrf_verify();
+$error   = '';
+$success = '';
+
+// ── UPLOAD schedule image ──────────────────────────────────────────
+if(isset($_POST['upload_schedule'])){
     $sec = trim($_POST['section']);
+
     if($sec === ''){
         $error = "Please select a section.";
+    } elseif(empty($_FILES['schedule_image']['name'])){
+        $error = "Please choose an image to upload.";
     } else {
+        $file     = $_FILES['schedule_image'];
+        $allowed  = ['image/jpeg','image/png','image/webp','image/gif'];
+        $ext_map  = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif'];
+        $mime     = mime_content_type($file['tmp_name']);
 
-        $chk = $conn->prepare("SELECT id FROM section_schedules WHERE section=? LIMIT 1");
-        $chk->bind_param("s", $sec);
-        $chk->execute();
-        $chk->store_result();
-        if($chk->num_rows > 0){
-            $error = "A schedule for \"$sec\" already exists. Use View to edit it.";
+        if(!in_array($mime, $allowed)){
+            $error = "Only JPG, PNG, WEBP, or GIF images are allowed.";
+        } elseif($file['size'] > 10 * 1024 * 1024){
+            $error = "File is too large. Maximum size is 10 MB.";
         } else {
-            $ins = $conn->prepare("INSERT INTO section_schedules (section, status) VALUES (?, 'draft')");
-            $ins->bind_param("s", $sec);
-            $ins->execute();
-            header("Location: timetable.php?section=".urlencode($sec));
-            exit();
+            // Delete old image if exists
+            $old = $conn->prepare("SELECT image_path FROM schedule_images WHERE section=?");
+            $old->bind_param("s", $sec);
+            $old->execute();
+            $old_row = $old->get_result()->fetch_assoc();
+            if($old_row && file_exists(__DIR__ . '/' . $old_row['image_path'])){
+                unlink(__DIR__ . '/' . $old_row['image_path']);
+            }
+
+            // Save new image
+            $filename   = 'schedule_images/' . md5($sec . time()) . '.' . $ext_map[$mime];
+            $dest       = __DIR__ . '/' . $filename;
+
+            if(move_uploaded_file($file['tmp_name'], $dest)){
+                $stmt = $conn->prepare("
+                    INSERT INTO schedule_images (section, image_path, uploaded_by)
+                    VALUES (?, ?, ?)
+                    ON DUPLICATE KEY UPDATE image_path=VALUES(image_path), uploaded_by=VALUES(uploaded_by), uploaded_at=NOW()
+                ");
+                $stmt->bind_param("sss", $sec, $filename, $_SESSION['fullname']);
+                $stmt->execute();
+
+                // Clear student schedule cache for this section
+                Cache::delete('sched_img_' . md5($sec));
+
+                $success = "Schedule image uploaded for section \"$sec\".";
+            } else {
+                $error = "Failed to save the file. Check server permissions.";
+            }
         }
     }
 }
 
-// --- PUBLISH ALL for a section ---
-if(isset($_POST['publish_section'])){
-    csrf_verify();
-    $sec = $_POST['publish_section'];
-    $stmt = $conn->prepare("UPDATE section_schedules SET status='published' WHERE section=?");
-    $stmt->bind_param("s", $sec);
-    $stmt->execute();
-    header("Location: admin_schedules.php?msg=published");
-   exit();
-    exit();
+// ── DELETE schedule image ──────────────────────────────────────────
+if(isset($_POST['delete_schedule'])){
+    $sec = trim($_POST['delete_section']);
+    $old = $conn->prepare("SELECT image_path FROM schedule_images WHERE section=?");
+    $old->bind_param("s", $sec);
+    $old->execute();
+    $old_row = $old->get_result()->fetch_assoc();
+    if($old_row){
+        if(file_exists(__DIR__ . '/' . $old_row['image_path'])){
+            unlink(__DIR__ . '/' . $old_row['image_path']);
+        }
+        $del = $conn->prepare("DELETE FROM schedule_images WHERE section=?");
+        $del->bind_param("s", $sec);
+        $del->execute();
+        Cache::delete('sched_img_' . md5($sec));
+        $success = "Schedule image removed for section \"$sec\".";
+    }
 }
 
-if(isset($_POST['draft_section'])){
-    csrf_verify();
-    $sec = $_POST['draft_section'];
-    $stmt = $conn->prepare("UPDATE section_schedules SET status='draft' WHERE section=?");
-    $stmt->bind_param("s", $sec);
-    $stmt->execute();
-    header("Location: admin_schedules.php?msg=drafted");
-   exit();
-    exit();
-}
-
-if(isset($_POST['delete_section'])){
-    csrf_verify();
-    $sec = $_POST['delete_section'];
-    $stmt = $conn->prepare("DELETE FROM section_schedules WHERE section=?");
-    $stmt->bind_param("s", $sec);
-    $stmt->execute();
-    header("Location: admin_schedules.php?msg=deleted");
-   exit();
-    exit();
-}
-
-$schedules_query = $conn->query("
-    SELECT
-        ss.section,
-        COUNT(CASE WHEN ss.subject IS NOT NULL AND ss.subject != '' THEN 1 END) as filled_slots,
-        SUM(CASE WHEN ss.status='published' THEN 1 ELSE 0 END) as published_count,
-        SUM(CASE WHEN ss.status='draft' THEN 1 ELSE 0 END) as draft_count,
-        (SELECT COUNT(*) FROM users u WHERE u.role='student' AND u.section=ss.section) as student_count
-    FROM section_schedules ss
-    GROUP BY ss.section
-    ORDER BY ss.section
+// ── Fetch all sections and their current schedule image ────────────
+$rows = $conn->query("
+    SELECT s.section_name,
+        (SELECT COUNT(*) FROM users u WHERE u.role='student' AND u.section=s.section_name) as student_count,
+        si.image_path,
+        si.uploaded_by,
+        si.uploaded_at
+    FROM sections s
+    LEFT JOIN schedule_images si ON si.section = s.section_name
+    ORDER BY s.section_name
 ");
-
-$available = $conn->query("
-    SELECT section_name FROM sections
-    WHERE section_name NOT IN (SELECT DISTINCT section FROM section_schedules)
-    ORDER BY section_name
-");
-
-$msg = $_GET['msg'] ?? '';
+$sections_data = $rows ? $rows->fetch_all(MYSQLI_ASSOC) : [];
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin - Schedules</title>
+<title>Admin – Schedules</title>
 <link rel="stylesheet" href="admin.css">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
-.two-col { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
-
 .form-group { margin-bottom: 14px; }
 .form-group label {
     display: block; font-size: 12px; color: var(--muted);
     margin-bottom: 5px; text-transform: uppercase; letter-spacing: .05em;
 }
-.form-group select {
+.form-group select,
+.form-group input[type="file"] {
     width: 100%; background: var(--bg); border: 1px solid var(--border);
     color: var(--text); padding: 9px 12px; border-radius: 8px;
-    font-size: 14px; font-family: 'DM Sans', sans-serif;
-    outline: none; box-sizing: border-box; transition: border-color .15s;
+    font-size: 14px; font-family: sans-serif;
+    outline: none; box-sizing: border-box;
 }
 .form-group select:focus { border-color: var(--accent); }
-.form-group select option { background: var(--surface); }
-
 .btn-primary {
     width: 100%; background: var(--accent); color: #000; border: none;
-    padding: 10px; border-radius: 8px; font-weight: 700; font-size: 14px;
-    cursor: pointer; font-family: 'DM Sans', sans-serif;
+    padding: 10px; border-radius: 8px; font-weight: 700;
+    font-size: 14px; cursor: pointer;
 }
 .btn-primary:hover { opacity: .9; }
-
-.sched-table { width: 100%; border-collapse: collapse; }
-.sched-table th {
-    background: var(--bg); color: var(--muted); font-size: 11px;
-    letter-spacing: .07em; text-transform: uppercase;
-    padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border);
+.alert { padding: 10px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 20px; }
+.alert-green { background: rgba(62,207,142,.1); border: 1px solid rgba(62,207,142,.3); color: var(--accent2); }
+.alert-red   { background: rgba(226,92,92,.1);  border: 1px solid rgba(226,92,92,.3);  color: var(--accent3); }
+.two-col { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
+@media(max-width:900px){ .two-col { grid-template-columns: 1fr; } }
+.sched-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
 }
-.sched-table td {
-    padding: 13px 14px; border-bottom: 1px solid var(--border);
-    font-size: 13px; vertical-align: middle;
+.sched-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
 }
-.sched-table tr:last-child td { border-bottom: none; }
-.sched-table tr:hover td { background: var(--bg); }
-
-.bar-track {
-    height: 4px; background: var(--border); border-radius: 99px;
-    width: 80px; overflow: hidden; display: inline-block;
-    vertical-align: middle; margin: 0 8px;
+.sched-card-img {
+    width: 100%;
+    height: 160px;
+    object-fit: cover;
+    display: block;
+    background: var(--border);
 }
-.bar-fill { height: 100%; background: var(--accent2); border-radius: 99px; }
-
-.pill { font-size: 11px; padding: 2px 9px; border-radius: 20px; font-weight: 500; margin-right: 4px; }
-.pill-green  { background: rgba(62,207,142,.12); color: var(--accent2); }
-.pill-yellow { background: rgba(240,180,41,.12);  color: var(--accent); }
-.pill-muted  { background: var(--border); color: var(--muted); }
-
+.sched-card-no-img {
+    width: 100%;
+    height: 160px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 13px;
+}
+.sched-card-body {
+    padding: 12px 14px;
+}
+.sched-card-name {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.sched-card-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 10px;
+}
+.sched-card-actions {
+    display: flex;
+    gap: 8px;
+}
 .act-btn {
     font-size: 12px; padding: 5px 12px; border-radius: 7px;
     border: 1px solid var(--border); background: transparent;
     color: var(--muted); cursor: pointer; text-decoration: none;
-    font-family: 'DM Sans', sans-serif; transition: all .15s; display: inline-block;
+    font-family: sans-serif; transition: all .15s; display: inline-block;
 }
-.act-btn:hover        { border-color: #444; color: var(--text); }
+.act-btn:hover { border-color: #444; color: var(--text); }
 .act-btn.danger:hover { border-color: var(--accent3); color: var(--accent3); }
-
-.alert { padding: 10px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 20px; }
-.alert-green { background: rgba(62,207,142,.1); border: 1px solid rgba(62,207,142,.3); color: var(--accent2); }
-.alert-red   { background: rgba(226,92,92,.1);  border: 1px solid rgba(226,92,92,.3);  color: var(--accent3); }
-
 .empty-state { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+/* Image preview */
+#imgPreviewWrap { margin-top: 10px; display: none; }
+#imgPreview { width: 100%; border-radius: 8px; max-height: 200px; object-fit: cover; border: 1px solid var(--border); }
 </style>
-<script>
-if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('light-mode');
-</script>
+<script>if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('light-mode');</script>
 </head>
 <body>
 
@@ -172,24 +199,13 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
 <!-- SIDEBAR -->
 <div class="sidebar" id="adminSidebar">
     <div class="sidebar-brand">
-    <img src="logo.png" alt="BCT Logo" style="width:140px;height:140px;border-radius:10%;display:block;margin:0 auto 10px;">
-
+        <img src="logo.png" alt="Logo" style="width:140px;height:140px;border-radius:10%;display:block;margin:0 auto 10px;">
     </div>
-        <nav class="sidebar-nav">
+    <nav class="sidebar-nav">
         <a href="admin.php"><span class="icon">◈</span> Dashboard</a>
         <a href="admin_users.php"><span class="icon">◉</span> Users</a>
-        <a href="admin_pending.php">
-            <span class="icon">◎</span> Pending
-            <?php
-            $__tbl = $conn->query("SHOW TABLES LIKE 'pending_registrations'");
-            $__pc = ($__tbl && $__tbl->num_rows > 0)
-                ? (int)$conn->query("SELECT COUNT(*) as c FROM pending_registrations WHERE status='pending'")->fetch_assoc()['c']
-                : 0;
-            if($__pc > 0) echo '<span style="background:#f0b429;color:#000;font-size:10px;font-weight:800;padding:1px 7px;border-radius:20px;margin-left:6px;">'.$__pc.'</span>';
-            ?>
-        </a>
+        <a href="admin_pending.php"><span class="icon">◎</span> Pending</a>
         <a href="admin_sections.php"><span class="icon">▣</span> Sections</a>
-        <a href="admin_timeslots.php"><span class="icon">◫</span> Time Slots</a>
         <a href="admin_schedules.php" class="active"><span class="icon">▦</span> Schedules</a>
         <a href="admin_grades.php"><span class="icon">◧</span> Grades</a>
         <a href="admin_audit.php">Audit Log</a>
@@ -202,12 +218,10 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
 <div class="main">
     <div class="topbar">
         <div class="topbar-left" style="display:flex;align-items:center;gap:12px;">
-            <button class="hamburger-btn" onclick="toggleSidebar()" aria-label="Toggle menu">
-                <span></span><span></span><span></span>
-            </button>
+            <button class="hamburger-btn" onclick="toggleSidebar()"><span></span><span></span><span></span></button>
             <div>
                 <h1>Schedules</h1>
-                <p>Create, manage, and publish section schedules</p>
+                <p>Upload a schedule image per section</p>
             </div>
         </div>
         <div class="topbar-right">
@@ -215,123 +229,91 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
                 <div class="admin-avatar"><?php echo strtoupper(substr($_SESSION['fullname'],0,1)); ?></div>
                 <span><?php echo htmlspecialchars($_SESSION['username']); ?></span>
             </div>
-            <button class="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light/dark mode">
+            <button class="theme-toggle-btn" onclick="toggleTheme()">
                 <span class="tog-track"><span class="tog-thumb"></span></span>
                 <span id="themeLabel">Light</span>
             </button>
         </div>
     </div>
 
-    <?php if($msg === 'published'): ?>
-    <div class="alert alert-green">Schedule published. Students can now view it.</div>
-    <?php elseif($msg === 'drafted'): ?>
-    <div class="alert alert-green">Schedule moved back to draft.</div>
-    <?php elseif($msg === 'deleted'): ?>
-    <div class="alert alert-red">Section schedule deleted.</div>
+    <?php if($success): ?>
+    <div class="alert alert-green"><?php echo htmlspecialchars($success); ?></div>
     <?php endif; ?>
-
     <?php if($error): ?>
     <div class="alert alert-red"><?php echo htmlspecialchars($error); ?></div>
     <?php endif; ?>
 
     <div class="two-col">
 
-        <div>
-            <div class="panel">
-                <div class="panel-header"><h3>Create Schedule</h3></div>
-
-                <?php if($available && $available->num_rows > 0): ?>
-                <form method="POST">
-                    <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-                    <div class="form-group">
-                        <label>Section</label>
-                        <select name="section" required>
-                            <option value="">Select section</option>
-                            <?php while($s = $available->fetch_assoc()): ?>
-                            <option value="<?php echo htmlspecialchars($s['section_name']); ?>">
-                                <?php echo htmlspecialchars($s['section_name']); ?>
-                            </option>
-                            <?php endwhile; ?>
-                        </select>
+        <!-- UPLOAD FORM -->
+        <div class="panel">
+            <div class="panel-header"><h3>Upload Schedule</h3></div>
+            <form method="POST" enctype="multipart/form-data" style="padding:16px;">
+                <div class="form-group">
+                    <label>Section</label>
+                    <select name="section" required>
+                        <option value="">Select section</option>
+                        <?php foreach($sections_data as $s): ?>
+                        <option value="<?php echo htmlspecialchars($s['section_name']); ?>">
+                            <?php echo htmlspecialchars($s['section_name']); ?>
+                            <?php echo $s['image_path'] ? ' (has image)' : ''; ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Schedule Image</label>
+                    <input type="file" name="schedule_image" accept="image/*" required onchange="previewImage(this)">
+                    <div id="imgPreviewWrap">
+                        <img id="imgPreview" src="" alt="Preview">
                     </div>
-                    <button type="submit" name="create_schedule" class="btn-primary">Create &rarr; Open Timetable</button>
-                </form>
-                <?php else: ?>
-                <p style="color:var(--muted); font-size:13px;">
-                    All sections already have schedules, or no sections have been added yet.
-                    <a href="admin_sections.php" style="color:var(--accent);">Add a section</a>
-                </p>
-                <?php endif; ?>
-            </div>
-
+                </div>
+                <button type="submit" name="upload_schedule" class="btn-primary">Upload Schedule</button>
+            </form>
         </div>
 
-        <!-- SCHEDULES TABLE -->
+        <!-- SECTIONS GRID -->
         <div class="panel">
             <div class="panel-header">
-                <h3>All Schedules</h3>
-                <span class="badge badge-yellow"><?php echo $schedules_query->num_rows; ?> sections</span>
+                <h3>All Sections</h3>
+                <span class="badge badge-yellow"><?php echo count($sections_data); ?> sections</span>
             </div>
 
-            <?php if($schedules_query->num_rows > 0): ?>
-            <table class="sched-table">
-                <tr>
-                    <th>Section</th>
-                    <th>Students</th>
-                    <th>Filled</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-                <?php
-                $total_slots = $conn->query("SELECT COUNT(*) as c FROM time_slots")->fetch_assoc()['c'];
-                $days = 6; 
-                $max_slots = $total_slots * $days;
-                while($row = $schedules_query->fetch_assoc()):
-                    $pct = $max_slots > 0 ? min(100, round(($row['filled_slots'] / $max_slots) * 100)) : 0;
-                ?>
-                <tr>
-                    <td><strong><?php echo htmlspecialchars($row['section']); ?></strong></td>
-                    <td><span class="pill pill-muted"><?php echo $row['student_count']; ?></span></td>
-                    <td>
-                        <?php echo $row['filled_slots']; ?> / <?php echo $max_slots; ?>
-                        <span class="bar-track"><span class="bar-fill" style="width:<?php echo $pct; ?>%"></span></span>
-                    </td>
-                    <td>
-                        <?php if($row['published_count'] > 0): ?>
-                        <span class="pill pill-green"><?php echo $row['published_count']; ?> published</span>
-                        <?php endif; ?>
-                        <?php if($row['draft_count'] > 0): ?>
-                        <span class="pill pill-yellow"><?php echo $row['draft_count']; ?> draft</span>
-                        <?php endif; ?>
-                    </td>
-                    <td>
-                        <div style="display:flex; gap:6px; flex-wrap:wrap;">
-                            <a href="timetable.php?section=<?php echo urlencode($row['section']); ?>" class="act-btn">View</a>
+            <?php if(empty($sections_data)): ?>
+            <div class="empty-state">No sections found. <a href="admin_sections.php" style="color:var(--accent);">Add sections first.</a></div>
+            <?php else: ?>
+            <div class="sched-grid" style="padding:16px;">
+                <?php foreach($sections_data as $s): ?>
+                <div class="sched-card">
+                    <?php if($s['image_path'] && file_exists(__DIR__ . '/' . $s['image_path'])): ?>
+                    <img class="sched-card-img"
+                         src="<?php echo htmlspecialchars($s['image_path']); ?>"
+                         alt="Schedule for <?php echo htmlspecialchars($s['section_name']); ?>">
+                    <?php else: ?>
+                    <div class="sched-card-no-img">No schedule uploaded</div>
+                    <?php endif; ?>
 
-                            <form method="POST" style="display:inline;">
-                                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-                                <input type="hidden" name="publish_section" value="<?php echo htmlspecialchars($row['section']); ?>">
-                                <button type="submit" class="act-btn">Publish All</button>
-                            </form>
-
-                            <form method="POST" style="display:inline;">
-                                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-                                <input type="hidden" name="draft_section" value="<?php echo htmlspecialchars($row['section']); ?>">
-                                <button type="submit" class="act-btn">Draft All</button>
-                            </form>
-
-                            <form method="POST" style="display:inline;" onsubmit="return confirm('Delete all schedules for <?php echo htmlspecialchars($row['section']); ?>?')">
-                                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-                                <input type="hidden" name="delete_section" value="<?php echo htmlspecialchars($row['section']); ?>">
-                                <button type="submit" class="act-btn danger">Delete</button>
+                    <div class="sched-card-body">
+                        <div class="sched-card-name"><?php echo htmlspecialchars($s['section_name']); ?></div>
+                        <div class="sched-card-meta">
+                            <?php echo $s['student_count']; ?> student<?php echo $s['student_count'] != 1 ? 's' : ''; ?>
+                            <?php if($s['uploaded_at']): ?>
+                            &nbsp;·&nbsp; Updated <?php echo date('M d, Y', strtotime($s['uploaded_at'])); ?>
+                            <?php endif; ?>
+                        </div>
+                        <?php if($s['image_path']): ?>
+                        <div class="sched-card-actions">
+                            <a href="<?php echo htmlspecialchars($s['image_path']); ?>" target="_blank" class="act-btn">View Full</a>
+                            <form method="POST" style="display:inline;" onsubmit="return confirm('Remove schedule image for <?php echo htmlspecialchars($s['section_name']); ?>?')">
+                                <input type="hidden" name="delete_section" value="<?php echo htmlspecialchars($s['section_name']); ?>">
+                                <button type="submit" name="delete_schedule" class="act-btn danger">Remove</button>
                             </form>
                         </div>
-                    </td>
-                </tr>
-                <?php endwhile; ?>
-            </table>
-            <?php else: ?>
-            <div class="empty-state">No schedules yet. Create one on the left.</div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
             <?php endif; ?>
         </div>
 
@@ -339,11 +321,15 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
 </div>
 
 <script>
-(function(){
-    if(localStorage.getItem('adminTheme') === 'light'){
-        document.body.classList.add('light-mode');
+function previewImage(input){
+    const wrap = document.getElementById('imgPreviewWrap');
+    const img  = document.getElementById('imgPreview');
+    if(input.files && input.files[0]){
+        const reader = new FileReader();
+        reader.onload = e => { img.src = e.target.result; wrap.style.display = 'block'; };
+        reader.readAsDataURL(input.files[0]);
     }
-})();
+}
 
 function toggleTheme(){
     const isLight = document.body.classList.toggle('light-mode');
@@ -351,12 +337,10 @@ function toggleTheme(){
     const lbl = document.getElementById('themeLabel');
     if(lbl) lbl.textContent = isLight ? 'Dark' : 'Light';
 }
-
 document.addEventListener('DOMContentLoaded', function(){
     const lbl = document.getElementById('themeLabel');
     if(lbl) lbl.textContent = document.body.classList.contains('light-mode') ? 'Dark' : 'Light';
 });
-
 function toggleSidebar(){
     document.getElementById('adminSidebar').classList.toggle('open');
     document.getElementById('sidebarOverlay').classList.toggle('active');

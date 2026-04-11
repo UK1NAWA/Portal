@@ -1,12 +1,11 @@
 <?php
 
-$servername = "sql100.infinityfree.com";
-$dbname     = "if0_41607430_student_portal";
-$dbusername = "if0_41607430";
-$dbpassword = "H011YPASSW0RD1";
+$servername = "localhost";
+$dbname     = "student_portal";
+$dbusername = "root";
+$dbpassword = "";
 
-
-$conn = new mysqli('p:' . $servername, $dbusername, $dbpassword, $dbname);
+$conn = new mysqli($servername, $dbusername, $dbpassword, $dbname);
 
 if ($conn->connect_error) {
     error_log("DB connection failed: " . $conn->connect_error);
@@ -36,7 +35,7 @@ class DBSessionHandler implements SessionHandlerInterface {
         $stmt = $this->conn->prepare(
             "SELECT session_data FROM php_sessions WHERE session_id = ? AND last_activity > ?"
         );
-        $expiry = time() - (3 * 24 * 60 * 60); // 3-day window matches teacher/admin timeout
+        $expiry = time() - (3 * 24 * 60 * 60);
         $stmt->bind_param("si", $id, $expiry);
         $stmt->execute();
         $result = $stmt->get_result()->fetch_assoc();
@@ -77,10 +76,9 @@ class DBSessionHandler implements SessionHandlerInterface {
 if (session_status() === PHP_SESSION_NONE) {
     ini_set('session.cookie_httponly', 1);
     ini_set('session.cookie_samesite', 'Lax');
-    ini_set('session.gc_maxlifetime', 259200); // 3 days — matches teacher/admin timeout
+    ini_set('session.gc_maxlifetime', 259200);
 }
 
-// Register the DB session handler before any session_start()
 $handler = new DBSessionHandler($conn);
 session_set_save_handler($handler, true);
 

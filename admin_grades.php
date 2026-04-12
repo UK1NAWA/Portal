@@ -23,22 +23,6 @@ if(isset($_POST['toggle_period'])){
     $msg = $new ? "Grading period opened." : "Grading period closed.";
 }
 
-// Lock a submission
-if(isset($_POST['lock_submission'])){
-    csrf_verify();
-    $id = (int)$_POST['submission_id'];
-    $conn->prepare("UPDATE grade_submissions SET status='locked' WHERE id=?")->bind_param("i",$id)->execute();
-    $msg = "Submission locked.";
-}
-
-// Unlock a submission
-if(isset($_POST['unlock_submission'])){
-    csrf_verify();
-    $id = (int)$_POST['submission_id'];
-    $conn->prepare("UPDATE grade_submissions SET status='submitted' WHERE id=?")->bind_param("i",$id)->execute();
-    $msg = "Submission unlocked.";
-}
-
 $periods = $conn->query("SELECT * FROM grading_periods ORDER BY FIELD(quarter,'Q1','Q2','Q3','Q4')")->fetch_all(MYSQLI_ASSOC);
 
 $submissions = $conn->query("
@@ -129,6 +113,22 @@ $submitted_count  = $open_quarter
 .progress-info { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .progress-bar-wrap { background: var(--border); border-radius: 6px; height: 6px; margin-bottom: 20px; }
 .progress-bar-fill { height: 6px; border-radius: 6px; background: var(--accent); transition: width 0.3s; }
+
+/* Grade viewer modal */
+.modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:999; justify-content:center; align-items:center; }
+.modal-overlay.open { display:flex; }
+.modal-box { background:var(--surface); border:1px solid var(--border); border-radius:14px; width:90%; max-width:800px; max-height:85vh; display:flex; flex-direction:column; overflow:hidden; }
+.modal-head { display:flex; justify-content:space-between; align-items:center; padding:18px 22px; border-bottom:1px solid var(--border); }
+.modal-head h3 { font-size:15px; font-weight:700; margin:0; }
+.modal-close { background:none; border:none; color:var(--muted); font-size:22px; cursor:pointer; line-height:1; }
+.modal-close:hover { color:var(--text); }
+.modal-body { padding:20px 22px; overflow-y:auto; }
+.grade-view-table { width:100%; border-collapse:collapse; font-size:13px; }
+.grade-view-table th { background:var(--bg); color:var(--muted); font-size:11px; letter-spacing:.07em; text-transform:uppercase; padding:9px 12px; text-align:left; border-bottom:1px solid var(--border); }
+.grade-view-table td { padding:10px 12px; border-bottom:1px solid var(--border); }
+.grade-view-table tr:last-child td { border-bottom:none; }
+.grade-view-table tr:hover td { background:var(--bg); }
+.modal-loading { text-align:center; color:var(--muted); padding:40px 0; font-size:13px; }
 </style>
 <script>
 if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('light-mode');
@@ -266,16 +266,7 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
                     <?php endif; ?>
                 </td>
                 <td style="display:flex; gap:6px; flex-wrap:wrap;">
-                    <a href="<?php echo htmlspecialchars($row['file_path']); ?>" class="act-btn" download>Download</a>
-                    <form method="POST" style="display:inline;">
-                        <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
-                        <input type="hidden" name="submission_id" value="<?php echo $row['id']; ?>">
-                        <?php if($row['status'] === 'locked'): ?>
-                        <button type="submit" name="unlock_submission" class="act-btn success">Unlock</button>
-                        <?php else: ?>
-                        <button type="submit" name="lock_submission" class="act-btn danger">Lock</button>
-                        <?php endif; ?>
-                    </form>
+                    <button type="button" class="act-btn" onclick="viewGrades(<?php echo $row['id']; ?>, '<?php echo htmlspecialchars($row['teacher_name'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($row['section'], ENT_QUOTES); ?>', '<?php echo $row['quarter']; ?>')">View</button>
                 </td>
             </tr>
             <?php endforeach; ?>
@@ -285,9 +276,57 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
     </div>
 </div>
 
-
+<!-- GRADE VIEWER MODAL -->
+<div class="modal-overlay" id="gradeModal">
+    <div class="modal-box">
+        <div class="modal-head">
+            <h3 id="gradeModalTitle">Grade Submission</h3>
+            <button class="modal-close" onclick="closeGradeModal()">&#x2715;</button>
+        </div>
+        <div class="modal-body" id="gradeModalBody">
+            <div class="modal-loading">Loading...</div>
+        </div>
+    </div>
+</div>
 
 <script>
+function viewGrades(id, teacher, section, quarter){
+    document.getElementById('gradeModalTitle').textContent = section + ' — ' + quarter + ' (' + teacher + ')';
+    document.getElementById('gradeModalBody').innerHTML = '<div class="modal-loading">Loading...</div>';
+    document.getElementById('gradeModal').classList.add('open');
+
+    fetch('admin_grades_view.php?id=' + id)
+        .then(r => r.json())
+        .then(data => {
+            if(!data.rows || data.rows.length === 0){
+                document.getElementById('gradeModalBody').innerHTML = '<p style="color:var(--muted);font-size:13px;">No grade data found.</p>';
+                return;
+            }
+            const headers = data.headers;
+            let html = '<table class="grade-view-table"><thead><tr>';
+            headers.forEach(h => html += '<th>' + h + '</th>');
+            html += '</tr></thead><tbody>';
+            data.rows.forEach(row => {
+                html += '<tr>';
+                row.forEach(cell => html += '<td>' + (cell ?? '—') + '</td>');
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            document.getElementById('gradeModalBody').innerHTML = html;
+        })
+        .catch(() => {
+            document.getElementById('gradeModalBody').innerHTML = '<p style="color:var(--accent3);font-size:13px;">Failed to load grades.</p>';
+        });
+}
+
+function closeGradeModal(){
+    document.getElementById('gradeModal').classList.remove('open');
+}
+
+document.getElementById('gradeModal').addEventListener('click', function(e){
+    if(e.target === this) closeGradeModal();
+});
+
 (function(){
     if(localStorage.getItem('adminTheme') === 'light'){
         document.body.classList.add('light-mode');

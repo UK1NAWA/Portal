@@ -21,25 +21,25 @@ $params = [];
 $types  = "";
 
 if($filter_action !== ''){
-    $where   .= " AND action = ?";
+    $where   .= " AND al.action = ?";
     $params[] = $filter_action;
     $types   .= "s";
 }
 if($filter_user !== ''){
-    $where   .= " AND (username LIKE ? OR role = ?)";
+    $where   .= " AND (al.username LIKE ? OR al.role = ?)";
     $like     = "%$filter_user%";
     $params[] = $like;
     $params[] = $filter_user;
     $types   .= "ss";
 }
 if($filter_date !== ''){
-    $where   .= " AND DATE(created_at) = ?";
+    $where   .= " AND DATE(al.created_at) = ?";
     $params[] = $filter_date;
     $types   .= "s";
 }
 
 // Count total
-$count_stmt = $conn->prepare("SELECT COUNT(*) as c FROM audit_log $where");
+$count_stmt = $conn->prepare("SELECT COUNT(*) as c FROM audit_log al LEFT JOIN users u ON u.username = al.username $where");
 if(!empty($params)) $count_stmt->bind_param($types, ...$params);
 $count_stmt->execute();
 $total_rows = $count_stmt->get_result()->fetch_assoc()['c'];
@@ -47,9 +47,12 @@ $total_pages = ceil($total_rows / $per_page);
 
 // Fetch logs
 $log_stmt = $conn->prepare(
-    "SELECT id, username, role, action, target, detail, ip_address, created_at
-     FROM audit_log $where
-     ORDER BY created_at DESC
+    "SELECT al.id, al.username, al.role, al.action, al.target, al.detail, al.created_at,
+            u.fullname
+     FROM audit_log al
+     LEFT JOIN users u ON u.username = al.username
+     $where
+     ORDER BY al.created_at DESC
      LIMIT ? OFFSET ?"
 );
 $params[] = $per_page;
@@ -232,7 +235,6 @@ body.light-mode .chip { background: #fff; border-color: #e2e5ec; }
                     <th>Action</th>
                     <th>Target</th>
                     <th>Detail</th>
-                    <th>IP Address</th>
                 </tr>
             </thead>
             <tbody>
@@ -243,7 +245,7 @@ body.light-mode .chip { background: #fff; border-color: #e2e5ec; }
                 <td style="white-space:nowrap; color:var(--muted); font-size:12px;">
                     <?php echo date('M d, Y H:i:s', strtotime($log['created_at'])); ?>
                 </td>
-                <td><?php echo htmlspecialchars($log['username'] ?? '—'); ?></td>
+                <td><?php echo htmlspecialchars($log['fullname'] ?? $log['username'] ?? '—'); ?></td>
                 <td style="color:var(--muted); font-size:12px;"><?php echo htmlspecialchars($log['role'] ?? '—'); ?></td>
                 <td>
                     <span class="action-pill" style="background:<?php echo $color; ?>22; color:<?php echo $color; ?>;">
@@ -255,9 +257,6 @@ body.light-mode .chip { background: #fff; border-color: #e2e5ec; }
                 </td>
                 <td style="color:var(--muted); font-size:12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                     <?php echo htmlspecialchars($log['detail'] ?? '—'); ?>
-                </td>
-                <td style="color:var(--muted); font-size:12px; font-family:monospace;">
-                    <?php echo htmlspecialchars($log['ip_address'] ?? '—'); ?>
                 </td>
             </tr>
             <?php endforeach; ?>

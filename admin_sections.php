@@ -68,6 +68,29 @@ if(isset($_POST['edit_section'])){
     $msg = "Section updated.";
 }
 
+// Assign student to section
+if(isset($_POST['assign_student'])){
+    csrf_verify();
+    $uid = (int)$_POST['user_id'];
+    $sec = trim($_POST['section_name']);
+    if($uid && $sec !== ''){
+        $stmt = $conn->prepare("UPDATE users SET section=? WHERE id=? AND role='student'");
+        $stmt->bind_param("si", $sec, $uid);
+        $stmt->execute();
+        $msg = "Student assigned to section \"$sec\".";
+    }
+}
+
+// Remove student from section
+if(isset($_POST['remove_student'])){
+    csrf_verify();
+    $uid = (int)$_POST['remove_uid'];
+    $stmt = $conn->prepare("UPDATE users SET section=NULL WHERE id=? AND role='student'");
+    $stmt->bind_param("i", $uid);
+    $stmt->execute();
+    $msg = "Student removed from section.";
+}
+
 // Fetch all
 $sections = $conn->query("
     SELECT s.*, u.fullname as teacher_name
@@ -82,6 +105,10 @@ $teachers_arr = $teachers->fetch_all(MYSQLI_ASSOC);
 $student_counts = [];
 $sc = $conn->query("SELECT section, COUNT(*) as c FROM users WHERE role='student' AND section IS NOT NULL GROUP BY section");
 while($r = $sc->fetch_assoc()) $student_counts[$r['section']] = $r['c'];
+
+// Unassigned students for the assign modal
+$unassigned = $conn->query("SELECT id, fullname, username FROM users WHERE role='student' AND (section IS NULL OR section='') ORDER BY fullname");
+$unassigned_arr = $unassigned->fetch_all(MYSQLI_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -155,6 +182,13 @@ while($r = $sc->fetch_assoc()) $student_counts[$r['section']] = $r['c'];
 .modal-btns button { flex:1; padding:9px; border-radius:8px; font-size:13px; cursor:pointer; font-family:'DM Sans',sans-serif; border:1px solid var(--border); }
 .btn-cancel { background:transparent; color:var(--muted); }
 .btn-save   { background:var(--accent); color:#000; border-color:var(--accent); font-weight:700; }
+
+/* Students modal */
+.modal-wide { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:28px; width:520px; max-width:95vw; max-height:80vh; overflow-y:auto; }
+.modal-wide h3 { font-size:16px; font-weight:700; margin-bottom:16px; }
+.student-list { display:flex; flex-direction:column; gap:8px; margin-bottom:20px; }
+.student-row { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; background:var(--bg); border-radius:8px; border:1px solid var(--border); font-size:13px; }
+.empty-list { color:var(--muted); font-size:13px; padding:10px 0; }
 </style>
 <script>
 if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('light-mode');
@@ -305,6 +339,7 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
                     <td>
                         <div style="display:flex; gap:6px;">
                             <button class="act-btn" onclick="openEdit(<?php echo $s['id']; ?>,'<?php echo htmlspecialchars($s['grade_level']); ?>','<?php echo htmlspecialchars($s['strand']); ?>','<?php echo htmlspecialchars($s['section_name']); ?>','<?php echo (int)($s['teacher_id'] ?? 0); ?>')">Edit</button>
+                            <button class="act-btn" onclick="openStudents('<?php echo htmlspecialchars($s['section_name'], ENT_QUOTES); ?>')">Students</button>
                             <a href="admin_sections.php?delete=<?php echo $s['id']; ?>" class="act-btn danger" onclick="return confirm('Delete section <?php echo htmlspecialchars($s['section_name']); ?>?')">Delete</a>
                         </div>
                     </td>
@@ -365,6 +400,101 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
         </form>
     </div>
 </div>
+
+<!-- Students Modal -->
+<div class="modal-overlay" id="studentsModal">
+    <div class="modal-wide">
+        <h3>Students in <span id="studentsModalTitle"></span></h3>
+
+        <!-- Current students list -->
+        <div id="currentStudentsList" class="student-list"></div>
+
+        <!-- Assign new student -->
+        <?php if(!empty($unassigned_arr)): ?>
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+            <input type="hidden" name="section_name" id="assignSectionName">
+            <div class="form-group" style="margin-bottom:10px;">
+                <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em;">Add Student</label>
+                <select name="user_id" required style="width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-size:14px;font-family:sans-serif;outline:none;box-sizing:border-box;">
+                    <option value="">Select unassigned student</option>
+                    <?php foreach($unassigned_arr as $u): ?>
+                    <option value="<?php echo $u['id']; ?>"><?php echo htmlspecialchars($u['fullname']); ?> (@<?php echo htmlspecialchars($u['username']); ?>)</option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="modal-btns">
+                <button type="button" class="btn-cancel" onclick="closeStudents()">Close</button>
+                <button type="submit" name="assign_student" class="btn-save">Assign</button>
+            </div>
+        </form>
+        <?php else: ?>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">No unassigned students available.</p>
+        <div class="modal-btns">
+            <button type="button" class="btn-cancel" onclick="closeStudents()">Close</button>
+        </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- Hidden remove forms injected by JS -->
+<div id="removeForms"></div>
+
+<script>
+// Build section → students map from PHP
+const sectionStudents = <?php
+    $map = [];
+    $all_students_q = $conn->query("SELECT id, fullname, username, section FROM users WHERE role='student' AND section IS NOT NULL ORDER BY fullname");
+    while($r = $all_students_q->fetch_assoc()){
+        $map[$r['section']][] = ['id' => $r['id'], 'fullname' => $r['fullname'], 'username' => $r['username']];
+    }
+    echo json_encode($map);
+?>;
+
+function openStudents(section){
+    document.getElementById('studentsModalTitle').textContent = section;
+    document.getElementById('assignSectionName').value = section;
+
+    const list = document.getElementById('currentStudentsList');
+    const students = sectionStudents[section] || [];
+
+    if(students.length === 0){
+        list.innerHTML = '<div class="empty-list">No students in this section yet.</div>';
+    } else {
+        list.innerHTML = students.map(s => `
+            <div class="student-row">
+                <span>${s.fullname} <span style="color:var(--muted);font-size:12px;">@${s.username}</span></span>
+                <button type="button" class="act-btn danger"
+                    onclick="removeStudent(${s.id})"
+                    style="font-size:11px;padding:3px 10px;">Remove</button>
+            </div>
+        `).join('');
+    }
+
+    document.getElementById('studentsModal').classList.add('open');
+}
+
+function closeStudents(){
+    document.getElementById('studentsModal').classList.remove('open');
+}
+
+function removeStudent(uid){
+    if(!confirm('Remove this student from the section?')) return;
+    const f = document.createElement('form');
+    f.method = 'POST';
+    f.innerHTML = `
+        <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+        <input type="hidden" name="remove_uid" value="${uid}">
+        <input type="hidden" name="remove_student" value="1">
+    `;
+    document.getElementById('removeForms').appendChild(f);
+    f.submit();
+}
+
+document.getElementById('studentsModal').addEventListener('click', function(e){
+    if(e.target === this) closeStudents();
+});
+</script>
 
 <script>
 function openEdit(id, grade, strand, name, teacherId){

@@ -120,12 +120,12 @@ if (isset($_POST['upload_grades'])) {
 
                     // Parse grades from CSV or XLSX/XLS
                     if (in_array($ext, ['csv', 'xlsx', 'xls'])) {
-                        $students_q = $conn->prepare("SELECT id, lrn FROM users WHERE role='student' AND section=? AND lrn IS NOT NULL");
+                        $students_q = $conn->prepare("SELECT id, student_id_no FROM users WHERE role='student' AND section=? AND student_id_no IS NOT NULL AND student_id_no != ''");
                         $students_q->bind_param("s", $section);
                         $students_q->execute();
                         $students_list = $students_q->get_result()->fetch_all(MYSQLI_ASSOC);
                         $student_map   = [];
-                        foreach ($students_list as $s) $student_map[trim($s['lrn'])] = $s['id'];
+                        foreach ($students_list as $s) $student_map[preg_replace('/\D/', '', trim($s['student_id_no']))] = $s['id'];
 
                         $saved   = 0;
                         $skipped = [];
@@ -324,11 +324,7 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
     <nav class="sidebar-nav">
         <a href="teacher_portal.php?page=dashboard"><span class="icon">◈</span> Dashboard</a>
         <a href="teacher_portal.php?page=students"><span class="icon">◉</span> Students</a>
-        <a href="teacher_portal.php?page=schedules"><span class="icon">▦</span> Schedules</a>
-        <a href="teacher_portal.php?page=announcements"><span class="icon">◫</span> Announcements</a>
         <a href="teacher_grades.php" class="active"><span class="icon">◧</span> Grades</a>
-        <a href="teacher_attendance.php"><span class="icon">▣</span> Attendance</a>
-        <a href="teacher_tasks.php"><span class="icon">◐</span> Tasks</a>
     </nav>
     <div class="sidebar-footer">
         <a href="logout.php"><span class="icon">◄</span> Logout</a>

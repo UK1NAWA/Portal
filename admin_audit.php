@@ -47,7 +47,7 @@ $total_pages = ceil($total_rows / $per_page);
 
 // Fetch logs
 $log_stmt = $conn->prepare(
-    "SELECT al.id, al.username, al.role, al.action, al.target, al.detail, al.created_at,
+    "SELECT al.id, al.username, al.role, al.action, al.target, al.created_at,
             u.fullname
      FROM audit_log al
      LEFT JOIN users u ON u.username = al.username
@@ -230,11 +230,10 @@ body.light-mode .chip { background: #fff; border-color: #e2e5ec; }
             <thead>
                 <tr>
                     <th>Time</th>
-                    <th>User</th>
+                    <th>FullName</th>
                     <th>Role</th>
                     <th>Action</th>
                     <th>Target</th>
-                    <th>Detail</th>
                 </tr>
             </thead>
             <tbody>
@@ -252,11 +251,8 @@ body.light-mode .chip { background: #fff; border-color: #e2e5ec; }
                         <?php echo htmlspecialchars($log['action']); ?>
                     </span>
                 </td>
-                <td style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                <td style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                     <?php echo htmlspecialchars($log['target'] ?? '—'); ?>
-                </td>
-                <td style="color:var(--muted); font-size:12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                    <?php echo htmlspecialchars($log['detail'] ?? '—'); ?>
                 </td>
             </tr>
             <?php endforeach; ?>

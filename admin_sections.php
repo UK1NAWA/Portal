@@ -91,6 +91,27 @@ if(isset($_POST['remove_student'])){
     $msg = "Student removed from section.";
 }
 
+// Bulk assign all students of a strand+grade to a section
+if(isset($_POST['bulk_assign'])){
+    csrf_verify();
+    $sec        = trim($_POST['bulk_section']);
+    $bulk_grade = trim($_POST['bulk_grade']);
+    $bulk_strand= trim($_POST['bulk_strand']);
+    if($sec !== '' && $bulk_grade !== '' && $bulk_strand !== ''){
+        $stmt = $conn->prepare("
+            UPDATE users SET section=?
+            WHERE role='student'
+            AND year_level=?
+            AND strand=?
+            AND (section IS NULL OR section='')
+        ");
+        $stmt->bind_param("sss", $sec, $bulk_grade, $bulk_strand);
+        $stmt->execute();
+        $affected = $stmt->affected_rows;
+        $msg = "$affected student(s) from $bulk_grade – $bulk_strand assigned to \"$sec\".";
+    }
+}
+
 // Fetch all
 $sections = $conn->query("
     SELECT s.*, u.fullname as teacher_name
@@ -109,6 +130,22 @@ while($r = $sc->fetch_assoc()) $student_counts[$r['section']] = $r['c'];
 // Unassigned students for the assign modal
 $unassigned = $conn->query("SELECT id, fullname, username FROM users WHERE role='student' AND (section IS NULL OR section='') ORDER BY fullname");
 $unassigned_arr = $unassigned->fetch_all(MYSQLI_ASSOC);
+
+// Grouped unassigned students by grade + strand for bulk assign
+$grouped_unassigned = [];
+$grp_q = $conn->query("
+    SELECT year_level, strand, COUNT(*) as total
+    FROM users
+    WHERE role='student' AND (section IS NULL OR section='')
+    AND year_level IS NOT NULL AND strand IS NOT NULL
+    AND year_level != '' AND strand != ''
+    GROUP BY year_level, strand
+    ORDER BY year_level, strand
+");
+if($grp_q) while($r = $grp_q->fetch_assoc()) $grouped_unassigned[] = $r;
+
+// Sections list for bulk assign dropdown
+$sections_arr = $conn->query("SELECT section_name, grade_level, strand FROM sections ORDER BY grade_level, strand, section_name")->fetch_all(MYSQLI_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -189,6 +226,17 @@ $unassigned_arr = $unassigned->fetch_all(MYSQLI_ASSOC);
 .student-list { display:flex; flex-direction:column; gap:8px; margin-bottom:20px; }
 .student-row { display:flex; justify-content:space-between; align-items:center; padding:9px 12px; background:var(--bg); border-radius:8px; border:1px solid var(--border); font-size:13px; }
 .empty-list { color:var(--muted); font-size:13px; padding:10px 0; }
+
+/* Bulk assign */
+.bulk-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:14px; margin-top:8px; }
+.bulk-card { background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+.bulk-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.bulk-card-title { font-size:14px; font-weight:700; }
+.bulk-card-count { font-size:11px; background:rgba(240,180,41,.12); color:var(--accent); padding:2px 10px; border-radius:20px; font-weight:600; }
+.bulk-card select { width:100%; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:8px 10px; border-radius:8px; font-size:13px; outline:none; margin-bottom:10px; box-sizing:border-box; }
+.bulk-card select:focus { border-color:var(--accent); }
+.bulk-assign-btn { width:100%; background:var(--accent); color:#000; border:none; padding:8px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; }
+.bulk-assign-btn:hover { opacity:.9; }
 </style>
 <script>
 if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('light-mode');
@@ -352,6 +400,56 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
         </div>
 
     </div>
+</div>
+
+<!-- BULK ASSIGN PANEL -->
+<div class="panel" style="margin:0 20px 20px;">
+    <div class="panel-header">
+        <h3>Bulk Assign by Strand</h3>
+        <span class="badge badge-yellow"><?php echo count($grouped_unassigned); ?> group(s) unassigned</span>
+    </div>
+
+    <?php if(empty($grouped_unassigned)): ?>
+    <p style="color:var(--muted);font-size:13px;padding:16px 0;">All students have been assigned to a section.</p>
+    <?php else: ?>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+        Select a section for each group then click Assign All. Only unassigned students will be moved.
+    </p>
+    <div class="bulk-grid">
+        <?php foreach($grouped_unassigned as $grp): ?>
+        <div class="bulk-card">
+            <div class="bulk-card-header">
+                <div class="bulk-card-title">
+                    <?php echo htmlspecialchars($grp['year_level']); ?>
+                    &nbsp;–&nbsp;
+                    <?php echo htmlspecialchars($grp['strand']); ?>
+                </div>
+                <span class="bulk-card-count"><?php echo $grp['total']; ?> student<?php echo $grp['total'] != 1 ? 's' : ''; ?></span>
+            </div>
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="<?php echo csrf_token(); ?>">
+                <input type="hidden" name="bulk_grade"  value="<?php echo htmlspecialchars($grp['year_level']); ?>">
+                <input type="hidden" name="bulk_strand" value="<?php echo htmlspecialchars($grp['strand']); ?>">
+                <select name="bulk_section" required>
+                    <option value="">-- Select Section --</option>
+                    <?php foreach($sections_arr as $sec):
+                        $match = ($sec['grade_level'] === $grp['year_level'] && $sec['strand'] === $grp['strand']);
+                    ?>
+                    <option value="<?php echo htmlspecialchars($sec['section_name']); ?>"
+                        <?php echo $match ? 'style="font-weight:700;"' : ''; ?>>
+                        <?php echo htmlspecialchars($sec['section_name']); ?>
+                        <?php echo $match ? ' ✓' : ''; ?>
+                    </option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="submit" name="bulk_assign" class="bulk-assign-btn">
+                    Assign All <?php echo $grp['total']; ?> →
+                </button>
+            </form>
+        </div>
+        <?php endforeach; ?>
+    </div>
+    <?php endif; ?>
 </div>
 
 <!-- Edit Modal -->

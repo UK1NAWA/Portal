@@ -9,12 +9,20 @@ class Cache {
     private static $dir = __DIR__ . '/cache/';
     private static $enabled = true;
 
+    // Auto-create the cache directory if it doesn't exist
+    private static function ensureDir(): void {
+        if(!is_dir(self::$dir)){
+            mkdir(self::$dir, 0755, true);
+        }
+    }
+
     // Store a value in cache
     // $key     = unique name e.g. 'timeslots', 'schedule_ICT11A'
     // $data    = anything (array, string, int)
     // $seconds = how long to keep it (default 60 seconds)
     public static function set(string $key, $data, int $seconds = 60): void {
         if(!self::$enabled) return;
+        self::ensureDir();
         $file    = self::$dir . self::filename($key);
         $payload = serialize(['expires' => time() + $seconds, 'data' => $data]);
         file_put_contents($file, $payload, LOCK_EX);

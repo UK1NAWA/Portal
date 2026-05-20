@@ -47,10 +47,7 @@ $msg = $_GET['msg'] ?? '';
 // ============================================================
 $my_sections_q = $conn->prepare("
     SELECT s.id, s.section_name, s.grade_level, s.strand,
-        (SELECT COUNT(*) FROM users u WHERE u.role='student' AND u.section=s.section_name) as student_count,
-        (SELECT COUNT(*) FROM section_schedules ss WHERE ss.section=s.section_name AND ss.subject IS NOT NULL AND ss.subject!='') as filled_slots,
-        (SELECT COUNT(*) FROM section_schedules ss WHERE ss.section=s.section_name AND ss.status='published') as published_slots,
-        (SELECT COUNT(*) FROM section_schedules ss WHERE ss.section=s.section_name) as total_slots
+        (SELECT COUNT(*) FROM users u WHERE u.role='student' AND u.section=s.section_name) as student_count
     FROM sections s WHERE s.teacher_id=? ORDER BY s.section_name
 ");
 $my_sections_q->bind_param("i", $teacher_id);
@@ -58,21 +55,6 @@ $my_sections_q->execute();
 $sections_arr = $my_sections_q->get_result()->fetch_all(MYSQLI_ASSOC);
 $my_section_count = count($sections_arr);
 $my_students = array_sum(array_column($sections_arr, 'student_count'));
-
-// Time slots (used in schedules page)
-$slot_result = $conn->query("SELECT * FROM time_slots ORDER BY id");
-$time_slots  = [];
-while($sl = $slot_result->fetch_assoc()) $time_slots[] = $sl;
-
-// Personal schedule (used in both dashboard & schedules page)
-$ps_q = $conn->prepare("SELECT * FROM teacher_schedule WHERE teacher_id=?");
-$ps_q->bind_param("i", $teacher_id);
-$ps_q->execute();
-$ps_rows = $ps_q->get_result()->fetch_all(MYSQLI_ASSOC);
-$personal_sched = [];
-foreach($ps_rows as $r) $personal_sched[$r['day']][$r['time_slot_id']] = $r;
-
-$days = ['Mon','Tue','Wed','Thu','Fri','Sat'];
 
 // ============================================================
 // PAGE-SPECIFIC DATA
@@ -139,28 +121,6 @@ if($page === 'students'){
 .modal-btns button { flex:1; padding:9px; border-radius:8px; font-size:13px; cursor:pointer; font-family:sans-serif; border:1px solid var(--border); }
 .btn-cancel { background:transparent; color:var(--muted); }
 .btn-save   { background:var(--accent); color:#000; border-color:var(--accent); font-weight:700; }
-
-/* ── Two-column layout for schedules + dashboard panels ── */
-.side-by-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
-@media(max-width:900px){ .side-by-side { grid-template-columns:1fr; } }
-
-/* ── Personal timetable grid ── */
-.my-tt { width:100%; border-collapse:collapse; font-size:12px; }
-.my-tt th {
-    background:var(--bg); color:var(--muted);
-    font-size:10px; letter-spacing:.07em; text-transform:uppercase;
-    padding:8px 6px; border:1px solid var(--border); text-align:center;
-}
-.my-tt td { border:1px solid var(--border); padding:0; vertical-align:middle; text-align:center; }
-.my-tt .time-lbl { background:var(--bg); color:var(--muted); font-size:10px; padding:6px 8px; white-space:nowrap; }
-.tt-cell { height:58px; cursor:pointer; transition:background .15s; }
-.tt-cell:hover { background:rgba(240,180,41,.06); }
-.tt-filled { background:var(--surface); }
-.tt-inner { display:flex; flex-direction:column; justify-content:center; align-items:center; gap:1px; padding:4px 3px; height:58px; }
-.tt-subj { font-size:11px; font-weight:600; color:var(--text); }
-.tt-sec  { font-size:10px; color:var(--accent); }
-.tt-room { font-size:10px; color:var(--muted); }
-.tt-empty { color:var(--border); font-size:16px; line-height:58px; }
 </style>
 </head>
 <body>
@@ -194,63 +154,11 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
 $alert_map = [
     'assigned' => ['green','Student added to section.'],
     'removed'  => ['green','Student removed from section.'],
-    'posted'   => ['green','Announcement posted.'],
-    'deleted'  => ['green','Announcement deleted.'],
-    'saved'    => ['green','Schedule updated.'],
 ];
 if($msg && isset($alert_map[$msg])): [$color,$text] = $alert_map[$msg]; ?>
 <div class="alert alert-<?php echo $color; ?>" style="margin-top:20px;"><?php echo $text; ?></div>
 <?php endif; ?>
 
-<?php
-// ── Reusable: personal timetable grid ─────────────────────────────────────────
-function render_personal_timetable($time_slots, $days, $personal_sched, $editable = false, $teacher_id = 0) {
-?>
-<div style="overflow-x:auto;">
-<table class="my-tt">
-    <thead>
-        <tr>
-            <th>Time</th>
-            <?php foreach($days as $d) echo "<th>$d</th>"; ?>
-        </tr>
-    </thead>
-    <tbody>
-    <?php foreach($time_slots as $slot): ?>
-    <tr>
-        <td class="time-lbl"><?php echo htmlspecialchars($slot['label']); ?></td>
-        <?php foreach($days as $d):
-            $entry = $personal_sched[$d][$slot['id']] ?? null;
-        ?>
-        <td class="tt-cell <?php echo $entry ? 'tt-filled' : ''; ?>"
-            <?php if($editable): ?>
-            onclick="openTTModal('<?php echo htmlspecialchars($d,ENT_QUOTES); ?>',<?php echo $slot['id']; ?>,'<?php echo htmlspecialchars($slot['label'],ENT_QUOTES); ?>','<?php echo $entry ? htmlspecialchars($entry['subject'],ENT_QUOTES) : ''; ?>','<?php echo $entry ? htmlspecialchars($entry['section'],ENT_QUOTES) : ''; ?>','<?php echo $entry ? htmlspecialchars($entry['room'],ENT_QUOTES) : ''; ?>')"
-            <?php endif; ?>>
-            <?php if($entry && ($entry['subject'] || $entry['section'] || $entry['room'])): ?>
-            <div class="tt-inner">
-                <span class="tt-subj"><?php echo htmlspecialchars($entry['subject'] ?? ''); ?></span>
-                <?php if(!empty($entry['section'])): ?>
-                <span class="tt-sec"><?php echo htmlspecialchars($entry['section']); ?></span>
-                <?php endif; ?>
-                <?php if(!empty($entry['room'])): ?>
-                <span class="tt-room"><?php echo htmlspecialchars($entry['room']); ?></span>
-                <?php endif; ?>
-            </div>
-            <?php else: ?>
-            <span class="tt-empty"><?php echo $editable ? '+' : '&nbsp;'; ?></span>
-            <?php endif; ?>
-        </td>
-        <?php endforeach; ?>
-    </tr>
-    <?php endforeach; ?>
-    </tbody>
-</table>
-</div>
-<?php if($editable): ?>
-<p style="font-size:11px;color:var(--muted);margin-top:8px;">Click any cell to add or edit. Leave all fields blank to clear a cell.</p>
-<?php endif; ?>
-<?php
-}
-?>
 
 <?php if($page === 'dashboard'): ?>
 <!-- ══ DASHBOARD ══ -->
@@ -272,16 +180,6 @@ function render_personal_timetable($time_slots, $days, $personal_sched, $editabl
     </div>
 </div>
 
-<div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-number"><?php echo $my_section_count; ?></div>
-        <div class="stat-label">My Sections</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-number"><?php echo $my_students; ?></div>
-        <div class="stat-label">My Students</div>
-    </div>
-</div>
 
 <!-- My Sections -->
 <div class="panel">
@@ -414,24 +312,6 @@ function toggleTheme(){
 document.addEventListener('DOMContentLoaded', function(){
     const lbl = document.getElementById('themeLabel');
     if(lbl) lbl.textContent = document.body.classList.contains('light-mode') ? 'Dark' : 'Light';
-});
-
-function openTTModal(day, slotId, slotLabel, subject, section, room){
-    document.getElementById('ttModalTitle').textContent = day + ' · ' + slotLabel;
-    document.getElementById('tt_day').value     = day;
-    document.getElementById('tt_slot_id').value = slotId;
-    document.getElementById('tt_subject').value = subject;
-    document.getElementById('tt_section').value = section;
-    document.getElementById('tt_room').value    = room;
-    document.getElementById('ttModal').classList.add('open');
-}
-
-function closeTTModal(){
-    document.getElementById('ttModal').classList.remove('open');
-}
-
-document.getElementById('ttModal')?.addEventListener('click', function(e){
-    if(e.target === this) closeTTModal();
 });
 
 function toggleSidebar(){

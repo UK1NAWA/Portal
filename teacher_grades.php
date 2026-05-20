@@ -120,12 +120,12 @@ if (isset($_POST['upload_grades'])) {
 
                     // Parse grades from CSV or XLSX/XLS
                     if (in_array($ext, ['csv', 'xlsx', 'xls'])) {
-                        $students_q = $conn->prepare("SELECT id, student_id_no FROM users WHERE role='student' AND section=? AND student_id_no IS NOT NULL AND student_id_no != ''");
+                        $students_q = $conn->prepare("SELECT id, lrn FROM users WHERE role='student' AND section=? AND lrn IS NOT NULL");
                         $students_q->bind_param("s", $section);
                         $students_q->execute();
                         $students_list = $students_q->get_result()->fetch_all(MYSQLI_ASSOC);
                         $student_map   = [];
-                        foreach ($students_list as $s) $student_map[preg_replace('/\D/', '', trim($s['student_id_no']))] = $s['id'];
+                        foreach ($students_list as $s) $student_map[trim($s['lrn'])] = $s['id'];
 
                         $saved   = 0;
                         $skipped = [];

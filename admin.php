@@ -31,16 +31,12 @@ if($stats === null){
         'total_users'         => (int)$conn->query("SELECT COUNT(*) as c FROM users")->fetch_assoc()['c'],
         'total_teachers'      => (int)$conn->query("SELECT COUNT(*) as c FROM users WHERE role='teacher'")->fetch_assoc()['c'],
         'total_students'      => (int)$conn->query("SELECT COUNT(*) as c FROM users WHERE role='student'")->fetch_assoc()['c'],
-        'total_sections'      => (int)$conn->query("SELECT COUNT(*) as c FROM sections")->fetch_assoc()['c'],
-        'published_schedules' => (int)$conn->query("SELECT COUNT(*) as c FROM section_schedules WHERE status='published'")->fetch_assoc()['c'],
     ];
     Cache::set('admin_dashboard_stats', $stats, 60);
 }
-$total_users         = $stats['total_users'];
-$total_teachers      = $stats['total_teachers'];
-$total_students      = $stats['total_students'];
-$total_sections      = $stats['total_sections'];
-$published_schedules = $stats['published_schedules'];
+$total_users    = $stats['total_users'];
+$total_teachers = $stats['total_teachers'];
+$total_students = $stats['total_students'];
 
 // Pending count — short cache (30s) since it's action-critical
 $pending_reg_count = Cache::get('admin_pending_count');
@@ -86,7 +82,6 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
 
 <!-- SIDEBAR OVERLAY -->
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
-    <img src="logo.png" alt="BCT Logo" style="width:140px;height:140px;border-radius:10%;display:block;margin:0 auto 10px;">
 
 <!-- SIDEBAR -->
 <div class="sidebar" id="adminSidebar">
@@ -104,7 +99,6 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
             <?php endif; ?>
         </a>
         <a href="admin_sections.php">Sections</a>
-        <a href="admin_timeslots.php">Time Slots</a>
         <a href="admin_schedules.php">Schedules</a>
         <a href="admin_grades.php">Grades</a>
         <a href="admin_audit.php">Audit Log</a>
@@ -159,14 +153,6 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
             <div class="stat-label">Pending Registrations</div>
         </div>
         </a>
-        <div class="stat-card">
-            <div class="stat-number"><?php echo $total_sections; ?></div>
-            <div class="stat-label">Sections</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number"><?php echo $published_schedules; ?></div>
-            <div class="stat-label">Published Schedules</div>
-        </div>
     </div>
 
     <!-- BOTTOM GRID -->
@@ -195,7 +181,6 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
         <div class="panel">
             <div class="panel-header">
                 <h3>Students by Section</h3>
-                <span class="badge badge-green"><?php echo $total_sections; ?> sections</span>
             </div>
             <?php
             $rows = $section_rows;

@@ -157,7 +157,6 @@ body.light-mode .chip { background: #fff; border-color: #e2e5ec; }
         <a href="admin_users.php">Users</a>
         <a href="admin_pending.php">Pending</a>
         <a href="admin_sections.php">Sections</a>
-        <a href="admin_timeslots.php">Time Slots</a>
         <a href="admin_schedules.php">Schedules</a>
         <a href="admin_grades.php">Grades</a>
         <a href="admin_audit.php" class="active">Audit Log</a>

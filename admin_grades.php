@@ -159,7 +159,6 @@ if(localStorage.getItem('adminTheme')==='light') document.body.classList.add('li
             ?>
         </a>
         <a href="admin_sections.php"><span class="icon">▣</span> Sections</a>
-        <a href="admin_timeslots.php"><span class="icon">◫</span> Time Slots</a>
         <a href="admin_schedules.php"><span class="icon">▦</span> Schedules</a>
         <a href="admin_grades.php" class="active"><span class="icon">◧</span> Grades</a>
         <a href="admin_audit.php">Audit Log</a>
